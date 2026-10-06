@@ -1,0 +1,10 @@
+{"method":"GET","path":"/pets","query":{"status":"available","limit":"10"}}
+{"method":"GET","path":"/pets","query":{"status":"pending"}}
+{"method":"GET","path":"/pets","query":{"limit":"120"}}
+{"method":"GET","path":"/pets"}
+{"method":"GET","path":"/pets/7"}
+{"method":"GET","path":"/customers/c-100"}
+{"method":"POST","path":"/legacy/echo","request":{"media_type":"application/json","body":{"message":"hi"}}}
+{"method":"POST","path":"/legacy/decide","request":{"media_type":"application/json","body":{}}}
+{"method":"GET","path":"/unknown/path"}
+{"method":"POST","path":"/pets","headers":{"Content-Type":"application/json"},"request":{"media_type":"application/json","body":{"name":"Luna","kind":{"name":"Luna","breed":"pug"}}}}

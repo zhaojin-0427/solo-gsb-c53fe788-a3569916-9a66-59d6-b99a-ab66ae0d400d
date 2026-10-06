@@ -13,6 +13,8 @@ const state = {
   coverageDocs: { baseline: null, candidate: null },
   coverageFile: null,
   releaseDoc: null,
+  migrationDoc: null,
+  migrationFile: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -64,6 +66,13 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#btn-coverage-upload").addEventListener("click", uploadCoverage);
   $("#btn-coverage-export").addEventListener("click", exportCoverage);
   $("#btn-coverage-delete").addEventListener("click", removeCoverage);
+  $("#migration-file").addEventListener("change", (e) => {
+    state.migrationFile = e.target.files[0] || null;
+    $("#btn-migration-upload").disabled = !state.migrationFile;
+  });
+  $("#btn-migration-upload").addEventListener("click", uploadMigration);
+  $("#btn-migration-export").addEventListener("click", exportMigration);
+  $("#btn-migration-delete").addEventListener("click", removeMigration);
   $$("[data-export]").forEach((b) =>
     b.addEventListener("click", () => exportReport(b.dataset.export)));
   $("#btn-history").addEventListener("click", openHistory);
@@ -139,11 +148,13 @@ function loadReport(doc) {
   state.findingsById = new Map(doc.findings.map((f) => [f.id, f]));
   state.coverageDocs = { baseline: null, candidate: null };
   state.releaseDoc = null;
+  state.migrationDoc = null;
   $("#panel-result").hidden = false;
   $("#analysis-id").textContent = "#" + doc.analysis_id;
   $("#fingerprint").textContent = doc.fingerprint || "";
   render();
   loadCoverageSummaries();
+  refreshMigrationDoc();
   $("#panel-result").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -161,30 +172,25 @@ function render() {
     s.engine_stats.cycles_terminated || 0;
 
   const findings = filteredFindings();
+  const views = ["endpoints", "findings", "release", "coverage", "migration"];
+  const show = (name) => {
+    for (const v of views) $(`#list-${v}`).hidden = v !== name;
+  };
   if (state.view === "endpoints") {
-    $("#list-endpoints").hidden = false;
-    $("#list-findings").hidden = true;
-    $("#list-release").hidden = true;
-    $("#list-coverage").hidden = true;
+    show("endpoints");
     renderEndpoints(findings);
   } else if (state.view === "findings") {
-    $("#list-endpoints").hidden = true;
-    $("#list-findings").hidden = false;
-    $("#list-release").hidden = true;
-    $("#list-coverage").hidden = true;
+    show("findings");
     renderFlat(findings);
   } else if (state.view === "release") {
-    $("#list-endpoints").hidden = true;
-    $("#list-findings").hidden = true;
-    $("#list-release").hidden = false;
-    $("#list-coverage").hidden = true;
+    show("release");
     renderRelease();
-  } else {
-    $("#list-endpoints").hidden = true;
-    $("#list-findings").hidden = true;
-    $("#list-release").hidden = true;
-    $("#list-coverage").hidden = false;
+  } else if (state.view === "coverage") {
+    show("coverage");
     renderCoverage();
+  } else {
+    show("migration");
+    renderMigration();
   }
 }
 
@@ -865,6 +871,17 @@ async function loadCoverageSummaries() {
   } catch { /* coverage is optional; ignore summary fetch errors */ }
 }
 
+async function refreshMigrationDoc() {
+  try {
+    const data = await (await fetch(
+      `/api/analyses/${state.analysisId}/coverage`)).json();
+    if (data.request_migration && data.request_migration.available) {
+      state.migrationDoc = null; // force full fetch when the tab opens
+      if (state.view === "migration") renderMigration();
+    }
+  } catch { /* optional */ }
+}
+
 async function uploadCoverage() {
   const side = state.coverageSide;
   const file = state.coverageFile;
@@ -1040,6 +1057,216 @@ async function removeCoverage() {
   if (resp.ok) {
     state.coverageDocs[side] = null;
     renderCoverage();
+  }
+}
+
+// ------------------------------------------------- request migration
+const migOutcomeMeta = {
+  affected: { label: "受影响", cls: "mig-affected" },
+  unaffected: { label: "未受影响", cls: "mig-unaffected" },
+  inconclusive: { label: "待核", cls: "mig-inconclusive" },
+  not_applicable: { label: "不适用(基线失败)", cls: "mig-na" },
+  invalid: { label: "行格式错误", cls: "cov-invalid" },
+};
+const migStateMeta = {
+  pass: { icon: "✓", text: "通过", cls: "replay-ok" },
+  fail: { icon: "✗", text: "失败", cls: "replay-bad" },
+  pending: { icon: "？", text: "待定", cls: "replay-pending" },
+};
+const migMatchText = {
+  matched: "唯一匹配端点",
+  endpoint_missing: "无匹配端点",
+  ambiguous: "多模板歧义",
+};
+
+async function loadMigrationDoc() {
+  if (state.migrationDoc) return state.migrationDoc;
+  const resp = await fetch(
+    `/api/analyses/${state.analysisId}/migration/requests`);
+  if (!resp.ok) return null;
+  state.migrationDoc = await resp.json();
+  return state.migrationDoc;
+}
+
+async function uploadMigration() {
+  const file = state.migrationFile;
+  if (!file) return;
+  const btn = $("#btn-migration-upload");
+  const err = $("#migration-error");
+  err.textContent = "";
+  btn.disabled = true;
+  btn.textContent = "评估中…";
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const resp = await fetch(
+      `/api/analyses/${state.analysisId}/migration/requests`,
+      { method: "POST", body: fd });
+    if (!resp.ok) {
+      const e = await resp.json().catch(() => ({}));
+      throw new Error(e.detail || `HTTP ${resp.status}`);
+    }
+    state.migrationDoc = await resp.json();
+    renderMigrationBody();
+  } catch (exc) {
+    err.textContent = "上传/评估失败：" + exc.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "上传基线时期 NDJSON 评估请求迁移";
+  }
+}
+
+async function renderMigration() {
+  const body = $("#migration-body");
+  body.innerHTML = `<p class="hint">加载中…</p>`;
+  const doc = await loadMigrationDoc();
+  if (!doc) {
+    body.innerHTML = `<p class="hint">尚未上传基线时期调用记录（NDJSON）。
+      选择文件后点击「上传基线时期 NDJSON 评估请求迁移」。</p>`;
+  } else {
+    renderMigrationBody();
+  }
+  const has = !!doc;
+  $("#btn-migration-export").hidden = !has;
+  $("#btn-migration-delete").hidden = !has;
+}
+
+function renderMigrationBody() {
+  $("#migration-body").innerHTML = migrationHtml(state.migrationDoc);
+  $("#btn-migration-export").hidden = false;
+  $("#btn-migration-delete").hidden = false;
+}
+
+function sideVerdictHtml(v) {
+  if (!v) return `<span class="hint">—</span>`;
+  const st = migStateMeta[v.state] || { icon: "•", text: v.state, cls: "" };
+  const reasons = (v.reasons || []);
+  return `<div class="mig-side ${st.cls}">
+    <span class="mig-side-state">${st.icon} ${st.text}</span>
+    <span class="mig-side-match" title="${escapeHtml(migMatchText[v.match] || v.match)}">
+      ${v.operation ? `<code>${escapeHtml(v.operation)}</code>`
+        : escapeHtml(migMatchText[v.match] || v.match)}
+    </span>
+    ${reasons.length
+      ? `<ul class="replay-errors">${reasons.slice(0, 4)
+          .map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : ""}
+  </div>`;
+}
+
+function migrationHtml(doc) {
+  const s = doc.summary || {};
+  const cards = [
+    ["调用总数", s.calls_total, null],
+    ["受影响(基线✓/候选✗)", s.calls_affected, "mig-affected"],
+    ["未受影响(双侧✓)", s.calls_unaffected, "mig-unaffected"],
+    ["待核", s.calls_inconclusive, "mig-inconclusive"],
+    ["不适用(基线失败)", s.calls_not_applicable, "mig-na"],
+    ["行格式错误", s.calls_invalid, "cov-invalid"],
+    ["涉及端点数", s.endpoints_total, null],
+    ["含受影响请求端点", s.endpoints_with_affected, "mig-affected"],
+    ["候选缺端点", s.endpoints_missing_in_candidate, "mig-affected"],
+  ];
+  const cardsHtml = cards.map(([label, num, cls]) => `
+    <div class="cov-stat ${cls ? "mig-stat-" + cls.split("-")[1] : ""}">
+      <span class="cov-stat-num">${num ?? 0}</span>
+      <span class="cov-stat-label">${label}</span>
+    </div>`).join("");
+
+  const eps = (doc.endpoints || []).map((ep) => {
+    const mig = escapeHtml(ep.candidate_template || "");
+    let candInfo = "";
+    if (ep.candidate_endpoint_missing) {
+      candInfo = `<span class="mig-badge mig-affected">候选缺端点（确定失败）</span>`;
+    } else if (ep.candidate_ambiguous) {
+      candInfo = `<span class="mig-badge mig-inconclusive">候选多模板歧义（待核）</span>`;
+    } else {
+      candInfo = `<span class="mig-badge mig-unaffected">→ <code>${mig || escapeHtml(ep.candidate_operation || "")}</code></span>`;
+    }
+    const linePills = (lines, cls) => (lines || []).map((l) =>
+      `<a class="mig-line-pill ${cls}" data-line="${l}">${l}</a>`).join(" ");
+    return `<div class="cov-op${ep.affected_count ? " mig-op-affected" : ""}">
+      <div class="cov-op-head">
+        <span class="method ${methodClass(ep.method)}">${ep.method}</span>
+        <span class="ep-path">${escapeHtml(ep.path)}</span>
+        ${candInfo}
+      </div>
+      <div class="mig-ep-counts">
+        <span class="mig-badge mig-affected">受影响 ${ep.affected_count} 行</span>
+        <span class="mig-badge mig-unaffected">未受影响 ${ep.unaffected_count}</span>
+        <span class="mig-badge mig-inconclusive">待核 ${ep.inconclusive_count}</span>
+        <span class="mig-badge mig-na">不适用 ${ep.not_applicable_count}</span>
+      </div>
+      ${ep.affected_count
+        ? `<div class="mig-ep-lines">受影响请求行：${linePills(ep.affected_lines, "mig-affected")}</div>`
+        : ""}
+    </div>`;
+  }).join("");
+
+  const rows = (doc.rows || []).map((r) => {
+    const meta = migOutcomeMeta[r.outcome] || { label: r.outcome, cls: "" };
+    return `<tr data-line="${r.line}">
+      <td class="cov-line">${r.line}</td>
+      <td><span class="mig-badge ${meta.cls}">${meta.label}</span></td>
+      <td><span class="method ${methodClass(r.method || "")}">${escapeHtml(r.method || "—")}</span>
+          <code>${escapeHtml(r.path || "—")}</code>
+          ${r.request_media_type ? `<small class="mig-mt">${escapeHtml(r.request_media_type)}</small>` : ""}</td>
+      <td class="mig-cell">${sideVerdictHtml(r.baseline)}</td>
+      <td class="mig-cell">${sideVerdictHtml(r.candidate)}</td>
+      <td class="cov-reasons">${(r.reasons || []).map(escapeHtml)
+          .join("<br>")}</td>
+    </tr>`;
+  }).join("");
+
+  const html = `
+    <div class="cov-meta">
+      来源文件 <code>${escapeHtml(doc.source_file || "requests.ndjson")}</code>
+      · 评估方向：基线 → 候选 · 仅校验请求（<code>response</code> 已忽略）
+    </div>
+    <div class="cov-stat-grid">${cardsHtml}</div>
+    <h4 class="cov-section-title">按端点汇总（含受影响请求行）</h4>
+    <div class="cov-ops">${eps || `<p class="hint">没有可归属的端点。</p>`}</div>
+    <h4 class="cov-section-title">逐行迁移判定（基线 / 候选各侧三态结论与原因）</h4>
+    <div class="cov-rows-wrap">
+      <table class="cov-rows mig-rows">
+        <thead><tr><th>行</th><th>迁移裁决</th><th>请求</th>
+        <th>基线侧（参数/请求体）</th><th>候选侧（参数/请求体）</th><th>原因</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  requestAnimationFrame(() => {
+    $$(".mig-line-pill").forEach((pill) => {
+      pill.addEventListener("click", () => {
+        const line = pill.dataset.line;
+        const tr = document.querySelector(
+          `.mig-rows tbody tr[data-line="${line}"]`);
+        if (tr) {
+          tr.scrollIntoView({ behavior: "smooth", block: "center" });
+          tr.classList.add("mig-row-flash");
+          setTimeout(() => tr.classList.remove("mig-row-flash"), 1600);
+        }
+      });
+    });
+  });
+  return html;
+}
+
+function exportMigration() {
+  const a = document.createElement("a");
+  a.href = `/api/analyses/${state.analysisId}/migration/requests/export`;
+  a.download = "";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function removeMigration() {
+  if (!confirm("确定删除该分析的请求迁移评估结果？")) return;
+  const resp = await fetch(
+    `/api/analyses/${state.analysisId}/migration/requests`,
+    { method: "DELETE" });
+  if (resp.ok) {
+    state.migrationDoc = null;
+    renderMigration();
   }
 }
 

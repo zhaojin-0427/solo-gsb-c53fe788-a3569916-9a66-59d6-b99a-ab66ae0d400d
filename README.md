@@ -47,6 +47,14 @@ requestBody 被删除（`PARAMETER_MADE_REQUIRED` / `PARAMETER_ADDED_REQUIRED` /
   确定失败分支（如缺少必填属性）里的 `not` 等命中直接丢弃，`anyOf` 已有
   确定通过时其余分支的待定命中不再传播，嵌套属性的组合确定通过即正常
   计格（见下文「调用覆盖」）；结果随分析保存并确定性导出；
+- **请求迁移评估视图**：上传**基线时期** NDJSON 请求记录（`method` /
+  `path` / `query` / `headers` / `cookies` 及可选 `request.media_type` /
+  `body`，兼容调用覆盖旧行；`response` 一律忽略），同一具体请求分别匹配
+  **基线 / 候选两侧端点**并**各自绑定本侧路径参数**、以同一套三态原语独立
+  校验请求参数与请求体——候选缺端点＝**确定失败**，候选多模板命中＝**待核**，
+  模板变量改名时不复用基线绑定；逐行给出双侧通过 / 失败 / 待定原因，并按
+  端点汇总受影响请求（见下文「请求迁移评估」）；结果随分析保存并确定性导出，
+  **不读取也不修改调用覆盖结论与发布裁决**；
 - **确定性 JSON 导出**（键排序、无多余空白），响应头携带 SHA-256 指纹；
 - **契约发布放行裁决**：对完整 `report.findings` 逐项登记带理由与 UTC 到期时间
   的例外，返回「阻断 / 待核 / 可放行」及每项生效或失效原因；例外绑定报告版本，
@@ -78,6 +86,13 @@ docker compose up --build
 保存后的覆盖结论同样体现在 `GET /api/analyses/{id}/coverage/{side}` 与
 确定性导出中，页面、API、导出三者逐行一致。
 
+也可在页面「比对结果 → **请求迁移评估**」标签中上传**基线时期** NDJSON
+请求记录，逐行查看旧请求在基线 / 候选两侧的三态结论（通过 / 失败 / 待定）
+与迁移裁决（受影响 / 未受影响 / 待核 / 不适用）、候选缺端点与多模板歧义标记，
+以及按端点汇总的受影响请求行；或直接调用下文的请求迁移评估 HTTP API。
+该评估**只看请求、忽略 response**，与调用覆盖相互独立，不改变已保存的覆盖
+结果与发布放行裁决。
+
 也可在页面「比对结果 → **发布放行**」标签中查看完整 findings 的逐项依据、
 为指定破坏性或无法判定 finding 填写理由和 UTC 到期时间，顶部会显示
 **阻断 / 待核 / 可放行**；或直接调用下文的发布裁决 HTTP API。
@@ -94,6 +109,9 @@ docker compose up --build
 `pattern` 未支持关键字等），可将两个目录分别打成 ZIP 后上传。
 `examples/calls-baseline.ndjson` 是配套的调用记录示例，供「调用覆盖」功能上传
 （也可用 `curl -F file=@...` 直接提交，见下文「调用覆盖」）。
+`examples/requests-baseline.ndjson` 是**请求迁移评估**专用示例（每行只有请求、
+无 `response`；含枚举收窄、可选变必填、端点删除、`oneOf` 一过一待定等行），
+也可直接上传给调用覆盖之外的请求迁移评估接口（见下文「请求迁移评估」）。
 
 ## 本地开发（不使用 Docker）
 
@@ -130,6 +148,10 @@ pytest -q
 | `GET` | `/api/analyses/{id}/coverage/{side}` | 获取某侧完整调用覆盖文档（矩阵、缺口、逐行原因） |
 | `GET` | `/api/analyses/{id}/coverage/{side}/export` | 确定性导出某侧调用覆盖 JSON（带 SHA-256 指纹头） |
 | `DELETE` | `/api/analyses/{id}/coverage/{side}` | 删除某侧调用覆盖结果 |
+| `POST` | `/api/analyses/{id}/migration/requests` | 上传基线时期 NDJSON 请求记录，计算请求迁移评估 |
+| `GET` | `/api/analyses/{id}/migration/requests` | 获取请求迁移评估（汇总、按端点、逐行双侧三态原因） |
+| `GET` | `/api/analyses/{id}/migration/requests/export` | 确定性导出请求迁移评估 JSON（带 SHA-256 指纹头） |
+| `DELETE` | `/api/analyses/{id}/migration/requests` | 删除请求迁移评估结果 |
 | `DELETE` | `/api/analyses/{id}` | 删除分析 |
 | `GET` | `/api/health` | 服务与存储状态 |
 
@@ -374,6 +396,139 @@ curl -s "http://localhost:8000/api/analyses/$AID/export" -o report.json
 重复上传同一侧会**替换**旧结果；`DELETE` 删除指定侧；分析被删除时其覆盖一并删除。
 相同 NDJSON 输入永远产生字节一致的导出（含逐行原因，覆盖格只记录最早一行覆盖调用）。
 
+## 请求迁移评估（Request Migration Assessment）
+
+在已有分析上上传一份**基线时期**的 **NDJSON** 请求记录，逐行回答：
+**“旧客户端实际发出过、且基线服务端接受的这些请求，升级到候选服务端后是否仍被
+接受？”** 与调用覆盖不同，它**只校验请求、完全忽略 `response`**，且对同一份
+NDJSON 在**基线 / 候选两侧分别独立**匹配端点并校验，因此不读取、不修改已保存的
+调用覆盖结论（覆盖结论回答的是「响应状态码 × JSON 媒体类型」覆盖格，含响应校验，
+语义不同，不能直接当作迁移结论）与发布放行裁决；它只**复用同一套端点匹配与三态
+校验原语**（路径先精确后唯一模板、参数 coerce、`pattern` / `not` / 循环等未决因素
+的三态裁决），两侧各自独立重算。
+
+### NDJSON 行格式
+
+每行一个 JSON 对象（与调用覆盖的请求部分完全一致，旧调用行可直接上传，
+`response` 字段即使存在也被忽略）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `method` | HTTP 方法（大小写不敏感） |
+| `path` | 具体请求路径，以 `/` 开头（不含 query） |
+| `query` / `headers` / `cookies` | 参数键值对象，可省略（默认 `{}`） |
+| `request` | 可选请求描述：`media_type` + `body`；**缺省或无 `body` 键表示无请求实体** |
+| `response` | **忽略**（为兼容旧调用行而保留，不参与评估） |
+
+仓库自带 `examples/requests-baseline.ndjson`（纯请求行；含受影响、双侧通过、
+基线失败不适用、`oneOf` 一过一待定待核等各类行）；`examples/calls-baseline.ndjson`
+也可直接上传。
+
+### 双侧端点匹配与参数绑定
+
+同一具体路径在**每一侧**分别做端点匹配，规则与调用覆盖一致：
+
+1. 先匹配精确路径；精确路径存在但不支持该方法 → 该侧**无端点**；
+   否则在声明了该方法的路径模板中做结构匹配（字面段全等、`{var}` 段非空）；
+2. **唯一命中**才归属；同时命中多个模板 → 该侧**多模板歧义（待核）**；
+3. **模板变量改名时（如 `/items/{id}` → `/items/{itemId}`），各侧只按本侧
+   模板占位符从具体路径提取并绑定参数，绝不复用另一侧的参数绑定**；
+4. 候选侧**无端点（端点 / 方法被删除）是确定失败**，直接构成“基线接受、
+   候选拒绝”的受影响证据；候选侧**多模板歧义为待核**，不做失败结论。
+
+### 单侧三态请求校验与逐行迁移裁决
+
+请求参数（path/query/header/cookie 必填存在性 + schema，文本标量 coerce）与
+请求体（`requestBody.required`、content 媒体类型、JSON body schema）按与调用覆盖
+一致的**三态**校验：
+
+- **确定通过（pass）**：可判定约束全部通过，无循环 / 不可解析节点 /
+  `pattern`、`not` 等未支持约束等未决因素；
+- **确定失败（fail）**：已知约束已经失败（端点缺失、缺少必填参数、枚举收窄、
+  类型不被允许、请求体 schema 失败、媒体类型未声明……）；
+- **待定（pending）**：已知约束全过，但能否通过取决于未支持约束、
+  循环 / 不可解析节点、多模板歧义，或请求媒体为非 JSON（如
+  `application/xml`、`application/octet-stream`）无法按 JSON schema 判定。
+
+逐行迁移裁决（`rows[].outcome`）：
+
+| 基线侧 | 候选侧 | 迁移裁决 | 含义 |
+| --- | --- | --- | --- |
+| 确定通过 | 确定失败 | `affected` | **受影响**：旧请求迁移后被候选拒绝 |
+| 确定通过 | 确定通过 | `unaffected` | **未受影响**：双侧均接受 |
+| 确定通过 | 待定 | `inconclusive` | **待核**：候选侧仍有未决因素 |
+| 待定 | 任意 | `inconclusive` | **待核**：基线侧能否通过本就无定论（含基线侧多模板歧义） |
+| 确定失败 | 任意 | `not_applicable` | **不适用**：基线本就不接受该请求，不构成迁移回归证据 |
+| —（行非法） | — | `invalid` | **行格式错误**：两侧均无法评估 |
+
+> 注意：只有「**基线确定通过且候选确定失败**」才计受影响；基线自身失败的行
+> 列入不适用，避免把本就无效的请求误报成迁移回归；`oneOf` 一过一待定（基线请求
+> 体某支含未支持的 `not`）即使候选确定失败，也只能给**待核**，不宣称受影响。
+
+### 按端点汇总与持久化
+
+文档除 `rows`（逐行双侧 `state` / `match` / 命中模板 / 原因）外，还按
+**基线模板**汇总 `endpoints`：每端点的候选匹配模板、`candidate_endpoint_missing`
+（候选缺端点）、`candidate_ambiguous`（候选多模板歧义），以及受影响 / 未受影响 /
+待核 / 不适用的行号列表（受影响行号可点击跳到对应逐行记录）。
+
+结果随分析持久化（PostgreSQL 不可用时降级为进程内存储），重复上传**替换**旧结果，
+`DELETE` 删除，分析删除时一并删除；相同输入产生字节一致的确定性导出，指纹头为
+`X-Migration-Fingerprint`；已保存的迁移评估还会内嵌进分析总导出的
+`request_migration` 字段（与 `call_coverage` 并列，互不影响）。
+
+### API 用法
+
+```bash
+# 上传基线时期请求记录（multipart，字段名 file）
+curl -s -X POST "http://localhost:8000/api/analyses/$AID/migration/requests" \
+  -F file=@examples/requests-baseline.ndjson -o migration.json
+
+# 查询 / 导出（X-Migration-Fingerprint 为导出字节的 SHA-256）
+curl -s "http://localhost:8000/api/analyses/$AID/migration/requests"
+curl -s -D - "http://localhost:8000/api/analyses/$AID/migration/requests/export" \
+  -o request-migration.json
+```
+
+响应（节选）形如：
+
+```json
+{
+  "schema_version": "1.0",
+  "assessment": "request_migration",
+  "source_file": "requests-baseline.ndjson",
+  "summary": {
+    "calls_total": 10, "calls_affected": 3, "calls_unaffected": 4,
+    "calls_inconclusive": 1, "calls_not_applicable": 2, "calls_invalid": 0,
+    "endpoints_total": 7, "endpoints_with_affected": 2,
+    "endpoints_missing_in_candidate": 2,
+    "endpoints_ambiguous_in_candidate": 0
+  },
+  "endpoints": [
+    {"method": "POST", "path": "/legacy/echo",
+     "candidate_endpoint_missing": true,
+     "affected_count": 1, "affected_lines": [7]}
+  ],
+  "rows": [
+    {"line": 2, "outcome": "affected", "method": "GET", "path": "/pets",
+     "baseline": {"state": "pass", "match": "matched",
+                  "operation": "GET /pets", "matched_template": "/pets",
+                  "reasons": []},
+     "candidate": {"state": "fail", "match": "matched",
+                   "operation": "GET /pets", "matched_template": "/pets",
+                   "reasons": ["查询参数 'status'不满足契约约束: "
+                               "#: 值不在枚举 ['available', 'sold'] 中"]},
+     "reasons": ["基线确定通过（请求通过），候选确定失败（请求失败）→ 迁移受影响",
+                 "[候选] 查询参数 'status'不满足契约约束: ..."]}
+  ]
+}
+```
+
+整份文件没有任何可解析行时返回 `400`。页面使用方式：打开分析后进入
+「**请求迁移评估**」标签，选择 NDJSON 文件并上传；顶部卡片给出五类计数，
+中间按端点汇总（候选缺端点 / 多模板歧义有专门标记，受影响行号可点击跳转），
+下方逐行表格并排展示基线 / 候选两侧的三态结论、命中端点模板与完整原因。
+
 ## 判定规则（方向：基线 → 候选）
 
 ### 请求侧（不可收窄）
@@ -507,15 +662,16 @@ app/
     structuralreplay.py  # 结构性 finding（参数/请求体/状态码/媒体类型增删）的结构化反例与语义重放
     comparator.py        # 兼容性比较引擎与最小反例综合
     coverage.py          # 调用覆盖：NDJSON 解析、路径归属、参数/请求体/响应体约束核对、未支持关键字沿值判定、覆盖格
+    migration.py         # 请求迁移评估：同一请求双侧端点匹配（参数各自绑定）、三态请求校验、逐行迁移裁决、按端点汇总
     release.py           # 发布放行裁决：完整 findings、例外版本绑定、过期/重算原因
     replay.py            # 双侧重放校验（模式级 + 端点级）
     rules.py             # 规则目录与严重度
   analysis.py            # 编排：加载→比较→序列化→存储
   serialization.py       # 确定性 JSON 导出
-  db.py / store.py       # PostgreSQL 持久化 + 内存降级（含调用覆盖、发布例外）
+  db.py / store.py       # PostgreSQL 持久化 + 内存降级（含调用覆盖、请求迁移评估、发布例外）
   static/                # 原生 JS 前端（无框架、无构建步骤）
-examples/                # 基线 / 候选示例文档包 + calls-baseline.ndjson 调用记录
-tests/                   # pytest（引擎/循环 32 项 + API 26 项 + 调用覆盖 52 项）
+examples/                # 基线 / 候选示例文档包 + calls-baseline.ndjson 调用记录 + requests-baseline.ndjson 纯请求记录
+tests/                   # pytest（引擎/循环 32 项 + API 26 项 + 调用覆盖 52 项 + 请求迁移评估 16 项）
 ```
 
 ## 说明与边界

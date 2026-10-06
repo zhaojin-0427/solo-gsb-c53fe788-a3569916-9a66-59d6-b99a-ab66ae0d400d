@@ -381,3 +381,38 @@ code { font-family: var(--mono); background: var(--panel-2); padding: 1px 6px;
   background: rgba(245,166,35,.10); color: #ffd591; font-size: 11.5px; }
 .release-active-note { background: rgba(53,196,111,.10); color: #8be5ad; }
 .release-audit { font-size: 12px; color: var(--muted); }
+
+/* ============================================================ request migration */
+.mig-affected { background: var(--breaking-bg); color: var(--breaking);
+  border: 1px solid rgba(255,107,107,.35); }
+.mig-unaffected { background: var(--compatible-bg); color: var(--compatible);
+  border: 1px solid rgba(53,196,111,.35); }
+.mig-inconclusive { background: var(--undetermined-bg); color: var(--undetermined);
+  border: 1px solid rgba(245,166,35,.35); }
+.mig-na { background: var(--panel); color: var(--muted);
+  border: 1px solid var(--border); }
+.mig-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  font-weight: 600; white-space: nowrap; display: inline-block; }
+.mig-stat-affected .cov-stat-num { color: var(--breaking); }
+.mig-stat-unaffected .cov-stat-num { color: var(--compatible); }
+.mig-stat-inconclusive .cov-stat-num { color: var(--undetermined); }
+.mig-op-affected { border-color: rgba(255,107,107,.45); }
+.mig-ep-counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.mig-ep-lines { font-size: 11.5px; color: var(--muted); margin: 4px 0 2px; }
+.mig-line-pill { display: inline-block; min-width: 22px; text-align: center;
+  margin: 0 3px; padding: 1px 7px; border-radius: 6px; cursor: pointer;
+  background: rgba(255,107,107,.14); color: var(--breaking);
+  border: 1px solid rgba(255,107,107,.3); text-decoration: none; font-size: 11px; }
+.mig-line-pill:hover { background: rgba(255,107,107,.28); }
+.mig-rows td { vertical-align: top; }
+.mig-cell { min-width: 190px; max-width: 280px; }
+.mig-side { border-radius: 8px; padding: 6px 9px; font-size: 11.5px;
+  background: var(--panel-2); border: 1px solid var(--border); }
+.mig-side.replay-ok { border-color: rgba(53,196,111,.35); }
+.mig-side.replay-bad { border-color: rgba(255,107,107,.35); }
+.mig-side.replay-pending { border-color: rgba(245,166,35,.35); }
+.mig-side-state { font-weight: 700; margin-right: 6px; }
+.mig-side-match code { font-size: 11px; }
+.mig-mt { color: var(--muted); margin-left: 6px; }
+.mig-rows tbody tr.mig-row-flash { background: rgba(255,107,107,.18);
+  transition: background 1.6s ease; }

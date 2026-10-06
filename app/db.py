@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS analysis_coverage (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS analysis_migration (
+    id          TEXT PRIMARY KEY
+                REFERENCES analyses(id) ON DELETE CASCADE,
+    doc         JSONB NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS release_exceptions (
     analysis_id     TEXT NOT NULL
                     REFERENCES analyses(id) ON DELETE CASCADE,
@@ -271,6 +278,57 @@ class Database:
                     cur.execute(
                         f"UPDATE analysis_coverage SET {col} = NULL, "
                         f"updated_at = now() WHERE id = %s",
+                        (analysis_id,))
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def save_migration(self, analysis_id: str, doc: dict) -> bool:
+        if not self.available:
+            return False
+        try:
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO analysis_migration (id, doc, updated_at)
+                        VALUES (%s, %s, now())
+                        ON CONFLICT (id) DO UPDATE SET
+                            doc = EXCLUDED.doc,
+                            updated_at = now()
+                        """,
+                        (analysis_id, Json(doc)))
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def get_migration(self, analysis_id: str) -> Optional[dict[str, Any]]:
+        if not self.available:
+            return None
+        try:
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT doc FROM analysis_migration WHERE id = %s",
+                        (analysis_id,))
+                    r = cur.fetchone()
+            return r[0] if r else None
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
+
+    def delete_migration(self, analysis_id: str) -> bool:
+        if not self.available:
+            return False
+        try:
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM analysis_migration WHERE id = %s",
                         (analysis_id,))
                 conn.commit()
             return True

@@ -239,7 +239,8 @@ def _iter_lines(raw: bytes):
             yield i, line
 
 
-def _parse_line(line_no: int, raw_line: str) -> Any:
+def _parse_line(line_no: int, raw_line: str, *,
+                require_response: bool = True) -> Any:
     try:
         obj = json.loads(raw_line)
     except json.JSONDecodeError as exc:
@@ -275,16 +276,24 @@ def _parse_line(line_no: int, raw_line: str) -> Any:
     if not isinstance(request, dict):
         return err("request 必须是对象")
     response = obj.get("response")
+    # 调用覆盖需要 response（覆盖格 = 响应状态码 × 媒体类型）；请求迁移
+    # 评估只看请求，response 整个被忽略——存在与否、字段是否合法均不影响。
     if response is None:
-        return err("缺少 response 对象")
+        if require_response:
+            return err("缺少 response 对象")
+        response = {}
     if not isinstance(response, dict):
-        return err("response 必须是对象")
-    status = response.get("status")
-    if isinstance(status, bool) or not isinstance(status, (int, str)):
-        return err("response.status 缺失或不是整数/数字字符串")
-    status_text = str(status).strip()
-    if not re.fullmatch(r"[1-5]\d{2}", status_text):
-        return err(f"response.status={status!r} 不是合法 HTTP 状态码")
+        if require_response:
+            return err("response 必须是对象")
+        response = {}
+    status_text = ""
+    if require_response:
+        status = response.get("status")
+        if isinstance(status, bool) or not isinstance(status, (int, str)):
+            return err("response.status 缺失或不是整数/数字字符串")
+        status_text = str(status).strip()
+        if not re.fullmatch(r"[1-5]\d{2}", status_text):
+            return err(f"response.status={status!r} 不是合法 HTTP 状态码")
 
     return _Call(line=line_no, method=method, path=path,
                  query=maps["query"], headers=maps["headers"],
