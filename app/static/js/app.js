@@ -12,6 +12,8 @@ const state = {
   coverageSide: "baseline",
   coverageDocs: { baseline: null, candidate: null },
   coverageFile: null,
+  migrationDoc: null,
+  migrationFile: null,
   releaseDoc: null,
 };
 
@@ -64,6 +66,13 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#btn-coverage-upload").addEventListener("click", uploadCoverage);
   $("#btn-coverage-export").addEventListener("click", exportCoverage);
   $("#btn-coverage-delete").addEventListener("click", removeCoverage);
+  $("#migration-file").addEventListener("change", (e) => {
+    state.migrationFile = e.target.files[0] || null;
+    $("#btn-migration-upload").disabled = !state.migrationFile;
+  });
+  $("#btn-migration-upload").addEventListener("click", uploadMigration);
+  $("#btn-migration-export").addEventListener("click", exportMigration);
+  $("#btn-migration-delete").addEventListener("click", removeMigration);
   $$("[data-export]").forEach((b) =>
     b.addEventListener("click", () => exportReport(b.dataset.export)));
   $("#btn-history").addEventListener("click", openHistory);
@@ -138,6 +147,7 @@ function loadReport(doc) {
   state.analysisId = doc.analysis_id;
   state.findingsById = new Map(doc.findings.map((f) => [f.id, f]));
   state.coverageDocs = { baseline: null, candidate: null };
+  state.migrationDoc = null;
   state.releaseDoc = null;
   $("#panel-result").hidden = false;
   $("#analysis-id").textContent = "#" + doc.analysis_id;
@@ -161,30 +171,26 @@ function render() {
     s.engine_stats.cycles_terminated || 0;
 
   const findings = filteredFindings();
+  const panels = {
+    endpoints: $("#list-endpoints"),
+    findings: $("#list-findings"),
+    release: $("#list-release"),
+    coverage: $("#list-coverage"),
+    migration: $("#list-migration"),
+  };
+  for (const [name, el] of Object.entries(panels)) {
+    el.hidden = name !== state.view;
+  }
   if (state.view === "endpoints") {
-    $("#list-endpoints").hidden = false;
-    $("#list-findings").hidden = true;
-    $("#list-release").hidden = true;
-    $("#list-coverage").hidden = true;
     renderEndpoints(findings);
   } else if (state.view === "findings") {
-    $("#list-endpoints").hidden = true;
-    $("#list-findings").hidden = false;
-    $("#list-release").hidden = true;
-    $("#list-coverage").hidden = true;
     renderFlat(findings);
   } else if (state.view === "release") {
-    $("#list-endpoints").hidden = true;
-    $("#list-findings").hidden = true;
-    $("#list-release").hidden = false;
-    $("#list-coverage").hidden = true;
     renderRelease();
-  } else {
-    $("#list-endpoints").hidden = true;
-    $("#list-findings").hidden = true;
-    $("#list-release").hidden = true;
-    $("#list-coverage").hidden = false;
+  } else if (state.view === "coverage") {
     renderCoverage();
+  } else if (state.view === "migration") {
+    renderMigration();
   }
 }
 
@@ -1040,6 +1046,185 @@ async function removeCoverage() {
   if (resp.ok) {
     state.coverageDocs[side] = null;
     renderCoverage();
+  }
+}
+
+// ----------------------------------------------------- request migration
+const migClassMeta = {
+  affected: { label: "受影响", cls: "cov-failed" },
+  unaffected: { label: "未受影响", cls: "cov-covered" },
+  not_applicable: { label: "不适用", cls: "cov-excluded" },
+  pending: { label: "待核", cls: "cov-undetermined" },
+  invalid: { label: "行格式错误", cls: "cov-invalid" },
+};
+const migStateMeta = {
+  pass: { label: "✓ 通过", cls: "cov-covered" },
+  fail: { label: "✗ 失败", cls: "cov-failed" },
+  pending: { label: "？ 待定", cls: "cov-undetermined" },
+};
+
+async function ensureMigrationDoc() {
+  if (state.migrationDoc) return state.migrationDoc;
+  const resp = await fetch(
+    `/api/analyses/${state.analysisId}/migration`);
+  if (!resp.ok) return null;
+  const doc = await resp.json();
+  state.migrationDoc = doc;
+  return doc;
+}
+
+async function renderMigration() {
+  const body = $("#migration-body");
+  body.innerHTML = `<p class="hint">加载中…</p>`;
+  const doc = await ensureMigrationDoc();
+  if (!doc) {
+    body.innerHTML = `<p class="hint">尚未上传基线时期的请求记录（NDJSON）。
+      选择文件后点击「上传 NDJSON 评估迁移」。</p>`;
+  } else {
+    body.innerHTML = migrationHtml(doc);
+  }
+  const has = !!doc;
+  $("#btn-migration-export").hidden = !has;
+  $("#btn-migration-delete").hidden = !has;
+}
+
+async function uploadMigration() {
+  const file = state.migrationFile;
+  if (!file) return;
+  const btn = $("#btn-migration-upload");
+  const err = $("#migration-error");
+  err.textContent = "";
+  btn.disabled = true;
+  btn.textContent = "评估中…";
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const resp = await fetch(
+      `/api/analyses/${state.analysisId}/migration`,
+      { method: "POST", body: fd });
+    if (!resp.ok) {
+      const e = await resp.json().catch(() => ({}));
+      throw new Error(e.detail || `HTTP ${resp.status}`);
+    }
+    state.migrationDoc = await resp.json();
+    renderMigration();
+  } catch (exc) {
+    err.textContent = "上传/评估失败：" + exc.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "上传 NDJSON 评估迁移";
+  }
+}
+
+function migrationHtml(doc) {
+  const s = doc.summary || {};
+  const cards = [
+    ["受影响", s.affected],
+    ["未受影响", s.unaffected],
+    ["待核", s.pending],
+    ["不适用", s.not_applicable],
+    ["行格式错误", s.invalid],
+    ["受影响端点", `${s.endpoints_affected ?? 0} / ${s.endpoints_total ?? 0}`],
+  ].map(([label, num]) => `
+    <div class="cov-stat">
+      <span class="cov-stat-num">${num ?? 0}</span>
+      <span class="cov-stat-label">${label}</span>
+    </div>`).join("");
+
+  const sideCell = (side) => {
+    if (!side) return "—";
+    const meta = migStateMeta[side.state] || { label: side.state, cls: "" };
+    const op = side.operation
+      ? ` <code>${escapeHtml(side.operation)}</code>`
+      : "";
+    const reasons = (side.reasons || []).length
+      ? `<div class="cov-reasons">${side.reasons.map(escapeHtml)
+          .join("<br>")}</div>`
+      : "";
+    return `<span class="cov-badge ${meta.cls}">${meta.label}</span>${op}${reasons}`;
+  };
+
+  const endpoints = (doc.endpoints || []).map((ep) => {
+    const cand = (ep.candidate_operations || []).length
+      ? ep.candidate_operations.map((o) => `<code>${escapeHtml(o)}</code>`)
+          .join("、")
+      : `<span class="cov-na-pill">候选无对应端点</span>`;
+    const lines = (ep.lines || []).map((ln) => {
+      const meta = migClassMeta[ln.classification]
+        || { label: ln.classification, cls: "" };
+      return `<tr>
+        <td class="cov-line">${ln.line}</td>
+        <td><span class="cov-badge ${meta.cls}">${meta.label}</span></td>
+        <td>${ln.candidate_operation
+          ? `<code>${escapeHtml(ln.candidate_operation)}</code>` : "—"}</td>
+        <td class="cov-reasons">${(ln.reasons || []).map(escapeHtml)
+            .join("<br>") || "—"}</td>
+      </tr>`;
+    }).join("");
+    return `<div class="cov-op">
+      <div class="cov-op-head">
+        <span class="method ${methodClass(ep.method)}">${escapeHtml(ep.method)}</span>
+        <span class="ep-path">${escapeHtml(ep.path)}</span>
+        <span class="cov-op-progress">受影响 ${ep.affected} / ${ep.requests_total} 请求</span>
+      </div>
+      <div class="cov-op-note">候选侧归属：${cand}</div>
+      <div class="cov-rows-wrap" style="margin-top:8px">
+        <table class="cov-rows">
+          <thead><tr><th>行</th><th>迁移结论</th><th>候选端点</th><th>原因</th></tr></thead>
+          <tbody>${lines}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }).join("");
+
+  const rows = (doc.rows || []).map((r) => {
+    const meta = migClassMeta[r.classification]
+      || { label: r.classification, cls: "" };
+    return `<tr>
+      <td class="cov-line">${r.line}</td>
+      <td><span class="cov-badge ${meta.cls}">${meta.label}</span></td>
+      <td><span class="method ${methodClass(r.method || "")}">${escapeHtml(r.method || "—")}</span>
+          <code>${escapeHtml(r.path || "—")}</code></td>
+      <td>${sideCell(r.baseline)}</td>
+      <td>${sideCell(r.candidate)}</td>
+    </tr>`;
+  }).join("");
+
+  return `
+    <div class="cov-meta">
+      来源文件 <code>${escapeHtml(doc.source_file || "requests.ndjson")}</code>
+      · 请求 ${s.requests_total ?? 0} 行 · 受影响端点
+      ${s.endpoints_affected ?? 0} / ${s.endpoints_total ?? 0}
+    </div>
+    <div class="cov-stat-grid">${cards}</div>
+    <h4 class="cov-section-title">按端点汇总（受影响请求逐行含原因）</h4>
+    <div class="cov-ops">${endpoints || `<p class="hint">没有可归入基线端点的请求行。</p>`}</div>
+    <h4 class="cov-section-title">逐行双侧判定（通过 / 失败 / 待定均含原因）</h4>
+    <div class="cov-rows-wrap">
+      <table class="cov-rows">
+        <thead><tr><th>行</th><th>迁移结论</th><th>请求</th><th>基线侧</th><th>候选侧</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function exportMigration() {
+  const a = document.createElement("a");
+  a.href = `/api/analyses/${state.analysisId}/migration/export`;
+  a.download = "";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function removeMigration() {
+  if (!confirm("确定删除该分析的请求迁移评估结果？")) return;
+  const resp = await fetch(
+    `/api/analyses/${state.analysisId}/migration`,
+    { method: "DELETE" });
+  if (resp.ok) {
+    state.migrationDoc = null;
+    renderMigration();
   }
 }
 

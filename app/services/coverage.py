@@ -561,6 +561,10 @@ def _check_value(graph: SchemaGraph, label: str, node, value: Any,
             if cstate != TRI_FAIL:
                 state, errors, hits, effective = \
                     cstate, cerrors, chits, coerced
+            else:
+                # coerce 成功但代入值仍失败：报告代入后的真实约束失败
+                # （如 "80" 超出 maximum），而不是原始文本的类型错误
+                errors = cerrors
     if state == TRI_FAIL:
         failures.append(
             f"{label}不满足契约约束: {'; '.join(errors[:2])}")

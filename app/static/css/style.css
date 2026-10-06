@@ -266,7 +266,7 @@ code { font-family: var(--mono); background: var(--panel-2); padding: 1px 6px;
 }
 
 /* ============================================================ call coverage */
-.coverage-view { margin-top: 6px; }
+.coverage-view, .migration-view { margin-top: 6px; }
 .coverage-toolbar { display: flex; justify-content: space-between;
   align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
 .coverage-sides { display: flex; gap: 6px; }

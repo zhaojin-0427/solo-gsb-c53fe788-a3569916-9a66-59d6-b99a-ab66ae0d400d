@@ -18,6 +18,7 @@ class _MemoryStore:
         self._analyses: dict[str, dict] = {}
         self._packages: dict[str, dict] = {}
         self._coverage: dict[str, dict] = {}
+        self._migration: dict[str, dict] = {}
         self._release_exceptions: dict[tuple[str, str, str], dict] = {}
 
     @property
@@ -71,6 +72,18 @@ class _MemoryStore:
             if entry:
                 entry.pop(side, None)
 
+    def save_migration(self, analysis_id: str, doc: dict) -> None:
+        with self._lock:
+            self._migration[analysis_id] = doc
+
+    def get_migration(self, analysis_id: str) -> Optional[dict]:
+        with self._lock:
+            return self._migration.get(analysis_id)
+
+    def delete_migration(self, analysis_id: str) -> None:
+        with self._lock:
+            self._migration.pop(analysis_id, None)
+
     def save_release_exception(self, exception: dict) -> None:
         key = (exception["analysis_id"], exception["report_version"],
                exception["finding_id"])
@@ -88,6 +101,7 @@ class _MemoryStore:
             self._analyses.pop(analysis_id, None)
             self._packages.pop(analysis_id, None)
             self._coverage.pop(analysis_id, None)
+            self._migration.pop(analysis_id, None)
             for key in [k for k in self._release_exceptions
                         if k[0] == analysis_id]:
                 self._release_exceptions.pop(key, None)
@@ -177,6 +191,25 @@ class Store:
             self.db.delete_coverage(analysis_id, side)
         else:
             _memory.delete_coverage(analysis_id, side)
+
+    def save_migration(self, analysis_id: str, doc: dict) -> None:
+        if self.db.available:
+            ok = self.db.save_migration(analysis_id, doc)
+            if not ok:
+                _memory.save_migration(analysis_id, doc)
+        else:
+            _memory.save_migration(analysis_id, doc)
+
+    def get_migration(self, analysis_id: str) -> Optional[dict]:
+        if self.db.available:
+            return self.db.get_migration(analysis_id)
+        return _memory.get_migration(analysis_id)
+
+    def delete_migration(self, analysis_id: str) -> None:
+        if self.db.available:
+            self.db.delete_migration(analysis_id)
+        else:
+            _memory.delete_migration(analysis_id)
 
     def save_release_exception(self, exception: dict) -> None:
         if self.db.available:

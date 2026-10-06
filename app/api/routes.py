@@ -7,6 +7,7 @@ from ..analysis import analyze, filter_report, from_envelope
 from ..config import settings
 from ..services.loader import PackageError
 from ..services.coverage import CoverageError, build_coverage
+from ..services.migration import MigrationError, build_migration
 from ..services.release import build_release_decision, iso_utc, parse_datetime, \
     report_version, utc_now
 from ..services.replay import replay
@@ -125,6 +126,10 @@ def export_analysis(analysis_id: str, severity: str | None = None):
         doc["call_coverage"] = {
             side: coverage[side] for side in COVERAGE_SIDES
             if coverage.get(side) is not None}
+    migration = store.get_migration(analysis_id)
+    if migration is not None:
+        doc = dict(doc)
+        doc["request_migration"] = migration
     payload = _dumps_deterministic(doc)
     suffix = "all" if sev == SEVERITY_VALUES else "-".join(sorted(sev))
     filename = f"contract-report-{analysis_id}-{suffix}.json"
@@ -349,3 +354,72 @@ def export_coverage(analysis_id: str, side: str):
         headers={"Content-Disposition":
                  f'attachment; filename="{filename}"',
                  "X-Coverage-Fingerprint": _fingerprint(payload)})
+
+
+# --------------------------------------------------------------- 请求迁移
+@router.post("/analyses/{analysis_id}/migration", status_code=201)
+async def upload_migration(analysis_id: str, file: UploadFile):
+    if not store.get(analysis_id):
+        raise HTTPException(status_code=404, detail="分析不存在")
+    packages = store.get_packages(analysis_id)
+    if not packages:
+        raise HTTPException(status_code=409,
+                            detail="原始文档包不可用，无法计算请求迁移评估")
+    raw = await file.read()
+    _check_size(file.filename, raw)
+    pkg_b = from_envelope(packages["baseline"])
+    pkg_c = from_envelope(packages["candidate"])
+    try:
+        doc = build_migration(
+            pkg_b, pkg_c, raw,
+            source_file=file.filename or "requests.ndjson")
+    except MigrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # defensive: surface engine bugs as 422
+        raise HTTPException(status_code=422,
+                            detail=f"请求迁移评估计算失败: "
+                                   f"{exc.__class__.__name__}: {exc}")
+    store.save_migration(analysis_id, doc)
+    body = dict(doc)
+    body["stored"] = True
+    body["storage"] = store.status()
+    return body
+
+
+@router.get("/analyses/{analysis_id}/migration")
+def get_migration(analysis_id: str):
+    if not store.get(analysis_id):
+        raise HTTPException(status_code=404, detail="分析不存在")
+    doc = store.get_migration(analysis_id)
+    if doc is None:
+        raise HTTPException(status_code=404,
+                            detail="该分析尚未上传请求迁移评估")
+    return doc
+
+
+@router.delete("/analyses/{analysis_id}/migration", status_code=200)
+def delete_migration(analysis_id: str):
+    if not store.get(analysis_id):
+        raise HTTPException(status_code=404, detail="分析不存在")
+    if store.get_migration(analysis_id) is None:
+        raise HTTPException(status_code=404,
+                            detail="该分析尚未上传请求迁移评估")
+    store.delete_migration(analysis_id)
+    return {"deleted": analysis_id}
+
+
+@router.get("/analyses/{analysis_id}/migration/export")
+def export_migration(analysis_id: str):
+    if not store.get(analysis_id):
+        raise HTTPException(status_code=404, detail="分析不存在")
+    doc = store.get_migration(analysis_id)
+    if doc is None:
+        raise HTTPException(status_code=404,
+                            detail="该分析尚未上传请求迁移评估")
+    payload = _dumps_deterministic(doc)
+    filename = f"request-migration-{analysis_id}.json"
+    return Response(
+        content=payload, media_type="application/json",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{filename}"',
+                 "X-Migration-Fingerprint": _fingerprint(payload)})

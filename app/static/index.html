@@ -89,6 +89,7 @@
           <button class="btn btn-sm tab" data-view="findings">扁平列表</button>
           <button class="btn btn-sm tab" data-view="release">发布放行</button>
           <button class="btn btn-sm tab" data-view="coverage">调用覆盖</button>
+          <button class="btn btn-sm tab" data-view="migration">请求迁移</button>
         </div>
       </div>
 
@@ -120,6 +121,30 @@
           响应体可判定约束均通过时计入覆盖。
         </p>
         <div id="coverage-body"></div>
+      </div>
+
+      <!-- ===================== request migration view ===================== -->
+      <div id="list-migration" class="migration-view" hidden>
+        <div class="coverage-toolbar">
+          <div class="coverage-upload">
+            <input type="file" id="migration-file" accept=".ndjson,.jsonl,.json,.txt" />
+            <button id="btn-migration-upload" class="btn btn-primary btn-sm" disabled>上传 NDJSON 评估迁移</button>
+            <button id="btn-migration-export" class="btn btn-ghost btn-sm" hidden>⬇ 导出迁移 JSON</button>
+            <button id="btn-migration-delete" class="btn btn-ghost btn-sm" hidden>删除</button>
+            <span id="migration-error" class="error-text"></span>
+          </div>
+        </div>
+        <p class="hint" style="margin:8px 0 14px">
+          上传<b>基线时期</b>的 NDJSON 请求记录：每行含 <code>method</code>、<code>path</code>、
+          <code>query</code>、<code>headers</code>、<code>cookies</code> 及可选
+          <code>request.media_type</code> / <code>request.body</code>；兼容旧调用行
+          （含 <code>response</code>），但响应内容会被忽略。同一具体路径在基线与候选
+          两侧<b>分别</b>匹配端点并绑定参数（模板变量改名不会复用基线绑定），逐行给出
+          两侧「通过 / 失败 / 待定」原因：仅基线确定通过且候选确定失败记
+          <b>受影响</b>，双侧确定通过记<b>未受影响</b>，基线确定失败记<b>不适用</b>，
+          其余（任一侧待定）记<b>待核</b>。
+        </p>
+        <div id="migration-body"></div>
       </div>
     </section>
   </main>
